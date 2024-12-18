@@ -5,8 +5,9 @@
 // Resolution and speed are improved over using SpoutCam as a source
 //
 //    Recording
-//	      F1     - start recording
+//	  F1     - start recording
 //        F2     - stop recording
+//	  F5     - start streaming
 //        V      - show video folder
 //        H      - help
 //
@@ -20,8 +21,9 @@
 //        R      - reset
 //
 //    HotKeys (always active)
-//        ALT+F1 - start
+//        ALT+F1 - start recording
 //        ALT+F2 - stop
+//        ALT+F5 - start streaming
 //        ALT+Q  - stop and quit
 //
 // Records system audio together with the video using the DirectShow filter by Roger Pack
@@ -153,13 +155,16 @@ bool bStarted = false;    // For start print workaround = see code comments
 
 bool bCommandLine  = false;
 bool bStart  = false;
+bool bStrean  = false;
 bool bHide   = false;
 bool bPrompt = true;
 bool bAudio  = false;
+int port    = 8880;
 int codec    = 0; // 0 - mpeg4, 1 - h264, -1 none
 int quality  = 1; // 0 - low, 1 - medium, 2 - high
 int preset   = 0; // 0 - ultrafast, 1 - superfast, 2 - veryfast, 3 - faster
 std::string g_FileExt = "mp4";
+std::string g_Ip = "127.0.0.1";
 
 // FFmpeg arguments input by batch file (see aa-record.bat)
 int g_FPS = 30; // Output frame rate is extracted from the FFmpeg arguments
@@ -169,6 +174,7 @@ void ParseCommandLine(int argc, char* argv[]);
 BOOL WINAPI CtrlHandler(DWORD fdwCtrlType);
 void Receive();
 bool StartFFmpeg();
+bool StreamFFmpeg();
 void StopFFmpeg();
 void SetHotKeys();
 void ClearHotKeys();
@@ -235,6 +241,7 @@ int main(int argc, char* argv[])
 	// (see "DATA\Scripts\aa-record.bat")
 	//
 	// -start     - Immediate start encoding (default false)
+	// -stream    - Immediate start streaming (default false)
 	// -hide      - Hide the console when recording (show on taskbar)
 	// -prompt    - Prompt user with file name entry dialog (default false)
 	// -name      - User specified output name for FFmpeg
@@ -314,6 +321,7 @@ int main(int argc, char* argv[])
 						bPrompt = false;
 						StopFFmpeg();
 						bStart = false;
+						bStream = false;
 						ShowKeyCommands();
 						ShowWindow(g_hWnd, SW_SHOWNORMAL);
 					}
@@ -333,6 +341,24 @@ int main(int argc, char* argv[])
 					}
 					else {
 						SpoutMessageBox(NULL, "Start a sender to record", "SpoutRecorder", MB_ICONWARNING | MB_TOPMOST, 3000);
+						ShowKeyCommands();
+					}
+				}
+				else if (strstr(title, "stream") != 0) {
+					bStream = true;
+					if (strstr(title, "hide") != 0) {
+						bHide = true;
+						ShowWindow(g_hWnd, SW_HIDE);
+						ShowWindow(g_hWnd, SW_MINIMIZE);
+						ShowWindow(g_hWnd, SW_SHOWMINIMIZED);
+					}
+					// If a sender is active, start streaming
+					if (bActive) {
+						bStream = true;
+						StreamFFmpeg();
+					}
+					else {
+						SpoutMessageBox(NULL, "Start a sender to stream", "SpoutRecorder", MB_ICONWARNING | MB_TOPMOST, 3000);
 						ShowKeyCommands();
 					}
 				}
@@ -374,6 +400,19 @@ int main(int argc, char* argv[])
 										bExit = false;
 										// Leave this out for debugging with printf
 										system("cls"); // Clear the console
+										ShowKeyCommands();
+									}
+								}
+
+								// F5 - start streaming
+								if (vCode == 116) {
+									// If a sender is active, start streaming
+									if (bActive) {
+										bStream = true;
+										StreamFFmpeg();
+									}
+									else {
+										SpoutMessageBox(NULL, "Start a sender to stream", "SpoutRecorder", MB_ICONWARNING | MB_TOPMOST, 3000);
 										ShowKeyCommands();
 									}
 								}
@@ -502,7 +541,9 @@ int main(int argc, char* argv[])
 								if (key == 0x72) {
 									codec = 0;
 									g_FileExt = "mp4";
+									g_Ip = "127.0.0.1";
 									g_FPS    = 30;
+									port = 8880;
 									bAudio   = false;
 									bTopmost = false;
 									bPrompt  = false;
@@ -562,6 +603,19 @@ int main(int argc, char* argv[])
 					bStart = false;
 					system("cls");
 					ShowKeyCommands();
+				}
+
+				// ALT+F5 - 0x74 - start streaming
+				if (msg.wParam == 4) {
+					// If a sender is active, start streaming
+					if (bActive) {
+						bStream = true;
+						StreamFFmpeg();
+					}
+					else {
+						SpoutMessageBox(NULL, "Start a sender to stream", "SpoutRecorder", MB_ICONWARNING | MB_TOPMOST, 3000);
+						ShowKeyCommands();
+					}
 				}
 			}
 		}
@@ -635,6 +689,7 @@ void ShowKeyCommands()
 
 	std::string startstr   = "  F1     - start recording\n";
 	startstr              += "  F2     - stop recording \n";
+	startstr              += "  F5     - start streaming \n";
 	startstr              += "  V      - show video folder\n";
 	startstr              += "  H      - help\n";
 	startstr              += "\nSettings\n";
@@ -687,6 +742,7 @@ void ShowKeyCommands()
 	printf("Hot Keys\n");
 	printf("  ALT+F1 - start\n");
 	printf("  ALT+F2 - stop\n");
+	printf("  ALT+F5 - stream\n");
 	printf("  ALT+Q  - stop and quit\n");
 
 }
@@ -702,6 +758,10 @@ void ParseCommandLine(int argc, char* argv[])
 		// Default mpeg4
 		codec = 0;
 		g_FileExt = "mp4";
+
+		// Default stream
+		port = 8880;
+		g_Ip = "127.0.0.1";
 
 		std::string argstr;
 		for (int i = 1; i < argc; i++)
@@ -720,6 +780,35 @@ void ParseCommandLine(int argc, char* argv[])
 				else if (strstr(argv[i], "-start") != 0) {
 					// Command line immediate start
 					bStart = true;
+				}
+				else if (strstr(argv[i], "-stream") != 0) {
+					// Command line immediate streaming
+					bStream = true;
+
+					size_t pos = argstr.find("-stream");
+					if (pos != std::string::npos) {
+						// Remove arg
+						argstr = argstr.substr(pos+8); // "-stream "
+						g_Ip = argstr;
+					}
+				}
+				else if (strstr(argv[i], "-ip") != 0) {
+					// User specified streaming ip
+					size_t pos = argstr.find("-ip");
+					if (pos != std::string::npos) {
+						// Remove arg
+						argstr = argstr.substr(pos+4); // "-ip "
+						g_Ip = argstr;
+					}
+				}
+				else if (strstr(argv[i], "-port") != 0) {
+					// User specified streaming port
+					size_t pos = argstr.find("-port");
+					if (pos != std::string::npos) {
+						// Remove arg
+						argstr = argstr.substr(pos+6); // "-port "
+						port = argstr;
+					}
 				}
 				else if (strstr(argv[i], "-hide") != 0) {
 					// Hide window on record
@@ -818,6 +907,7 @@ void Receive()
 			StopFFmpeg();
 		}
 		bStart = false;
+		bStream = false;
 		bExit = false;
 		bActive = false;
 
@@ -841,6 +931,7 @@ void Receive()
 					if (recorder.IsEncoding()) {
 						StopFFmpeg();
 						bStart = false;
+						bStream = false;
 						bExit = false;
 					}
 					ShowKeyCommands();
@@ -871,6 +962,7 @@ void Receive()
 			if(recorder.IsEncoding()) {
 				StopFFmpeg();
 				bStart = false;
+				bStream = false;
 				ShowKeyCommands();
 			}
 
@@ -891,6 +983,23 @@ void Receive()
 					}
 				}
 			}
+
+			// Start FFmpeg streaming for F5 or the command line "-stream" argument
+			if (bStart) {
+				if (!StreamFFmpeg()) {
+
+					printf("                                    StreamFFmpeg failed\n");
+
+					// Quit completely for command line problem
+					if (bCommandLine) {
+						bStart = false;
+						bStream = false;
+						bExit = true;
+						SpoutMessageBox(NULL, "FFmpeg failed to start streaming with command line", "SpoutRecorder", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+						return;
+					}
+				}
+			}
 		}
 		else if (pixelBuffer && recorder.IsEncoding()) {
 			recorder.Write(pixelBuffer, g_SenderWidth*g_SenderHeight*4);
@@ -905,6 +1014,7 @@ void Receive()
 			g_SenderName[0] = 0;
 			bActive = false;
 			bStart = false;
+			bStream = false;
 			system("cls");
 			ShowKeyCommands();
 		}
@@ -1025,6 +1135,50 @@ bool StartFFmpeg()
 } // end StartFFmpeg
 
 
+bool StreamFFmpeg()
+{
+	
+	// Already streaming, no sender or no FFmpeg
+	if (recorder.IsEncoding() || !bActive || g_FFmpegPath.empty()) {
+		return false;
+	}
+
+	// Output file unless specified by command line
+	if (g_Ip.empty()) {
+		g_Ip = "127.0.0.1";
+	}
+
+	// Options for audio, codec and fps
+	recorder.EnableAudio(bAudio); // For recording system audio
+	// Set preset and quality before codec
+	recorder.SetPreset(preset); // h264 preset - // 0 - ultrafast, 1 - superfast, 2 - veryfast, 3 - faster
+	recorder.SetQuality(quality); // h264 quality - 0 - low, 1 - medium, 2 - high
+	recorder.SetCodec(codec); // mpeg4 or h264 codec (uses preset and quality)
+	recorder.SetFps(g_FPS); // Fps for FFmpeg (see HoldFps)
+
+	// Start FFmpeg pipe
+	recorder.Stream(g_FFmpegPath, g_Ip, g_SenderWidth, g_SenderHeight, false, port);
+
+	// Reset console text colour
+	SetConsoleTextAttribute(g_hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+
+	// Set caption
+	std::string capstr = g_SenderName;
+	capstr += ".";
+	capstr += g_FileExt;
+	
+	SetWindowTextA(g_hWnd, "Recording");
+
+	// Start flashing to show recording status
+	fwi.dwFlags = FLASHW_ALL | FLASHW_TIMER;
+	FlashWindowEx(&fwi);
+
+	// Code in Receive() is activated
+	return true;
+
+} // end StreamFFmpeg
+
+
 // Stop encoding with the Escape key or if the sender closes
 void StopFFmpeg()
 {
@@ -1040,7 +1194,7 @@ void StopFFmpeg()
 		FlashWindowEx(&fwi);
 
 		// Show the user the saved file details for 3 seconds
-		if(!bCommandLine && bPrompt) {
+		if(!bCommandLine && bPrompt && !bStream) {
 			char tmp[MAX_PATH];
 			sprintf_s(tmp, MAX_PATH, "Saved [%s]", g_OutputFile.c_str());
 			SpoutMessageBox(NULL, tmp, "SpoutRecorder", MB_OK | MB_TOPMOST | MB_ICONINFORMATION, 3000);
@@ -1075,6 +1229,8 @@ void SetHotKeys()
 	RegisterHotKey(NULL, 2, MOD_NOREPEAT | MOD_ALT, 0x70); // ALT+F1 - 0x70
 	// 3 - ALT+F2 - record with audio
 	RegisterHotKey(NULL, 3, MOD_NOREPEAT | MOD_ALT, 0x71); // ALT+F2 - 0x71
+	// 4 - ALT+F5 - start streaming
+	RegisterHotKey(NULL, 4, MOD_NOREPEAT | MOD_ALT, 0x74); // ALT+F2 - 0x74
 }
 
 void ClearHotKeys()
@@ -1085,6 +1241,8 @@ void ClearHotKeys()
 	UnregisterHotKey(NULL, 2);
 	// 3 - ALT+F2 - record with audio
 	UnregisterHotKey(NULL, 3);
+	// 4 - ALT+F5 - start streaming
+	UnregisterHotKey(NULL, 4);
 }
 
 void Close()
@@ -1114,6 +1272,10 @@ void WriteInitFile(const char* initfile)
 	// OPTIONS
 	//
 
+	sprintf_s(tmp, 256, "%d", port);
+	WritePrivateProfileStringA((LPCSTR)"Options", (LPCSTR)"Port", (LPCSTR)tmp, (LPCSTR)initfile);
+
+	
 	if (bAudio)
 		WritePrivateProfileStringA((LPCSTR)"Options", (LPCSTR)"Audio", (LPCSTR)"1", (LPCSTR)initfile);
 	else
@@ -1150,6 +1312,10 @@ void ReadInitFile(const char* initfile)
 	//
 	// OPTIONS
 	//
+
+	port = 8880;
+	GetPrivateProfileStringA((LPCSTR)"Options", (LPSTR)"Port", NULL, (LPSTR)tmp, 3, initfile);
+	if (tmp[0]) port = atoi(tmp);
 
 	bAudio = false;
 	GetPrivateProfileStringA((LPCSTR)"Options", (LPSTR)"Audio", NULL, (LPSTR)tmp, 3, initfile);
