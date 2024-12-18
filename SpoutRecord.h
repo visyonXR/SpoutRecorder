@@ -30,6 +30,7 @@ public:
 
 	bool Start(std::string ffmpegPath, std::string OutputFile,
 		unsigned int width, unsigned int height, bool bRgba = false);
+	bool Stream(std::string ffmpegPath, std::string ipAddress, std::string port = 8880, unsigned int width, unsigned int height, bool bRgba = false); // Declaración de Stream (TCP)
 	void Stop();
 #ifdef SPOUTGL
 	bool Write(GLuint TextureID, GLuint TextureTarget, unsigned int width, unsigned int height);
