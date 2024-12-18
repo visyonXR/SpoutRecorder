@@ -159,7 +159,7 @@ bool spoutRecord::Start(std::string ffmpegPath, std::string OutputFile,
 	args += " -r ";
 	args += std::to_string(m_FPS);
 
-	// The final ì-î tells FFmpeg to write to stdout
+	// The final ‚Äú-‚Äù tells FFmpeg to write to stdout
 	args += " -i - ";
 
 	// No codec is required for zmq output
@@ -173,7 +173,7 @@ bool spoutRecord::Start(std::string ffmpegPath, std::string OutputFile,
 	}
 	else {
 		if (m_codec == 0) { // mpeg4
-			// Default FFmpeg ìmpeg4î encoder (MPEG-4 Part 2 format)
+			// Default FFmpeg ‚Äúmpeg4‚Äù encoder (MPEG-4 Part 2 format)
 			// https://trac.ffmpeg.org/wiki/Encode/MPEG-4
 			args += " -vcodec mpeg4 -qscale:v 3"; // high quality
 			m_FileExt = "mp4";
@@ -260,6 +260,93 @@ bool spoutRecord::Start(std::string ffmpegPath, std::string OutputFile,
 	return (m_FFmpeg != nullptr);
 }
 
+
+// -----------------------------------------------
+// Stream video as h265 to an IP address (new function)
+//
+bool spoutRecord::Stream(std::string ffmpegPath, std::string ipAddress, std::string port, unsigned int width, unsigned int height, bool bRgba) {
+  // No FFmpeg if empty paths
+  if (ffmpegPath.empty() || ipAddress.empty()) {
+    return false;
+  }
+
+  // Stop if already streaming
+  if (m_FFmpeg) Stop();
+
+  // OpenGL context required (adapt for DirectX if needed)
+  #ifdef SPOUTGL
+  if (!wglGetCurrentContext()) {
+    SpoutMessageBox("OpenGL context required", MB_OK | MB_ICONWARNING);
+    return false;
+  }
+  #endif
+
+  std::string str = ffmpegPath; // FFmpeg.exe full path
+
+  // FFmpeg argument string (streaming to IP with h265)
+  // std::string args = " -hwaccel auto"; // Hardware encode if available
+  std::string args = " -hwaccel cuda"; // Usa CUDA para NVENC
+  args += " -threads 0"; // Maximum threads
+  args += " -thread_queue_size 4096"; // Input thread for low latency
+  // ... (other necessary arguments like fps, pixel format) ...
+  if (bRgba) args += " -pix_fmt rgba";
+  else args += " -pix_fmt bgra";
+
+  args += " -s ";
+  args += std::to_string(width);
+  args += "x";
+  args += std::to_string(height);
+
+  args += " -r ";
+  args += std::to_string(m_FPS);
+
+  args += " -i - ";
+	
+  // Set h265 codec and options
+  // args += " -vcodec libx265"; // h265 encoder
+  // You can add further options for x265 encoding here (preset, tune, crf)
+
+  // NVENC codec
+  args += " -c:v h265_nvenc"; // Codificador NVENC para H.265
+  // Ajustes de NVENC (puedes personalizarlos)
+  // Preset: slower=mejor calidad, faster=menor calidad, para streaming rapido ultrafast es lo mejor
+  if(m_Preset == 0) args += " -preset ultrafast";
+  else if (m_Preset == 1) args += " -preset superfast";
+  else if (m_Preset == 2) args += " -preset veryfast";
+  else if (m_Preset == 3) args += " -preset faster";
+  else args += " -preset slow";
+  args += " -tune zerolatency"; // Baja latencia para streaming
+  if(m_Quality == 0) args += " -crf 28"; // Baja calidad
+  else if (m_Quality == 1) args += " -crf 23"; // Calidad media
+  else args += " -crf 18"; // Alta calidad
+
+	
+  // Output to network stream using RTMP protocol
+  // args += " -f rtmp";
+  // args += " rtmp://"; // RTMP protocol prefix
+  // args += ipAddress;  // Target IP address
+
+  // Salida TCP
+  std::string tcpOutput = "tcp://";
+  tcpOutput += ipAddress;
+  tcpOutput += ":";
+  tcpOutput += std::to_string(port);
+  args += " -f mpegts "; // Formato de transporte para TCP
+  args += tcpOutput; // Salida a trav√©s de TCP
+	
+  str += args; // Add FFmpeg arguments
+
+  // Open pipe to ffmpeg's stdin in binary write mode
+  m_FFmpeg = _popen(str.c_str(), "wb");
+  if (!m_FFmpeg) {
+    printf("_popen failed\n");
+    return false;
+  }
+
+  // Allow FFmpeg to start
+  Sleep(10);
+  return (m_FFmpeg != nullptr);
+}
 
 // -----------------------------------------------
 // Stop FFmpeg encoding and free resources
