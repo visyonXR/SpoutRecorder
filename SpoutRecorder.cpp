@@ -985,7 +985,7 @@ void Receive()
 			}
 
 			// Start FFmpeg streaming for F5 or the command line "-stream" argument
-			if (bStart) {
+			if (bStream) {
 				if (!StreamFFmpeg()) {
 
 					printf("                                    StreamFFmpeg failed\n");
